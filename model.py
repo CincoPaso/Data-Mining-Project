@@ -26,6 +26,10 @@ from torch.utils.data import Dataset, DataLoader
 # Dataset Setup
 # ============================================
 
+# Shoutout Chat for all the help loading data.
+# I was very confused and it was able to help me get my
+# code working.
+
 base_dir = "archive" 
 
 def collect_files(base):
@@ -88,6 +92,8 @@ print("Data normalized using training set statistics")
 # ============================================
 # PyTorch Dataset
 # ============================================
+# Chat also helped me with splitting the data
+# with tensors.
 
 class WildfireDataset(Dataset):
     def __init__(self, X, y):
@@ -148,6 +154,10 @@ def train_with_validation(model, train_loader, val_loader, epochs=50, lr=1e-3, p
         if (epoch + 1) % 10 == 0:
             print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
         
+
+        # The early stopping was something chat recommended to me
+        # I had it help me implement this portion, and explain why
+        # this would be helpful.
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
@@ -279,6 +289,8 @@ print(f"Test Accuracy: {acc4:.4f}")
 # ============================================
 # Evaluation Functions
 # ============================================
+# I also recieved a lot of help with the evaluation
+# and graphing functions.
 
 def evaluate_model(y_true, y_pred, y_proba, model_name):
     print(f"\n{'='*60}")
