@@ -27,7 +27,8 @@ from torch.utils.data import Dataset, DataLoader
 # ============================================
 # Dataset Setup
 # ============================================
-
+# Setting up the data was an area where I had a lot of help
+# I used Claude and Chat GPT to help me create this data loader
 base_dir = "archive" 
 
 def collect_files(base):
@@ -156,6 +157,9 @@ def train_with_validation(model, train_loader, val_loader, epochs=50, lr=1e-3, p
         if (epoch + 1) % 10 == 0:
             print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
         
+        # Stopping early was something recommended by Chat GPT
+        # Chat helped me input this small portion
+
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
@@ -246,7 +250,7 @@ train_loader_cnn = DataLoader(train_dataset_cnn, batch_size=32, shuffle=True)
 val_loader_cnn = DataLoader(val_dataset_cnn, batch_size=32, shuffle=False)
 test_loader_cnn = DataLoader(test_dataset_cnn, batch_size=32, shuffle=False)
 
-
+# Claude helped me adapt my original CNN to include CAM support
 class CNNWithCAM(nn.Module):
     """CNN designed to support Class Activation Mapping"""
     def __init__(self):
@@ -303,6 +307,9 @@ print(f"Test Accuracy: {acc4:.4f}")
 # ============================================
 # Class Activation Mapping (CAM)
 # ============================================
+# Recieved guidance and input on this portion of the code
+# from Claude the next 3 functions are all things that I 
+# struggled with, so I got assistance.
 
 def generate_cam(model, image_tensor):
     """Generate Class Activation Map for a single image"""
@@ -416,6 +423,9 @@ def plot_cam_examples(model, X_test_cnn, y_test, paths_test, n_samples=8):
 # Feature Channel Visualization
 # ============================================
 
+# Recieved guidance and input on this portion of the code
+# from Claude 
+
 def plot_feature_channels(X_test_cnn, y_test, n_samples=6):
     """Visualize different feature representations of satellite images"""
     fig, axes = plt.subplots(n_samples, 7, figsize=(21, n_samples*3))
@@ -527,7 +537,7 @@ def evaluate_model(y_true, y_pred, y_proba, model_name):
         'confusion_matrix': cm
     }
 
-
+# Recieved guidance here
 def plot_training_curves(losses_dict):
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     
@@ -603,7 +613,7 @@ def plot_confusion_matrices(results_list):
     plt.savefig('confusion_matrices.png', dpi=300)
     plt.show()
 
-
+# Recieved guidance here
 def plot_metrics_comparison(results_list):
     metrics = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']
     models = [r['model'] for r in results_list]
@@ -706,10 +716,6 @@ print("  - feature_channels.png  [NEW]")
 print("  - model_results.csv")
 
 best_model_idx = np.argmax([r['f1'] for r in results])
-print(f"\n🏆 Best Model (by F1-score): {results[best_model_idx]['model']}")
+print(f"\n Best Model (by F1-score): {results[best_model_idx]['model']}")
 print(f"   F1-Score: {results[best_model_idx]['f1']:.4f}")
 print(f"   ROC-AUC: {results[best_model_idx]['roc_auc']:.4f}")
-
-print("\n" + "="*60)
-print("PROJECT COMPLETE!")
-print("="*60)
