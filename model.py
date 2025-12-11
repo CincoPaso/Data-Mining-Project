@@ -459,6 +459,7 @@ def plot_feature_channels(X_test_cnn, y_test, n_samples=6):
         
         # Computed indices
         # Normalized Difference (simulated vegetation index)
+        # Used the kernels recommended to me
         nd = (img[:, :, 1] - img[:, :, 0]) / (img[:, :, 1] + img[:, :, 0] + 1e-8)
         axes[row, 4].imshow(nd, cmap='RdYlGn')
         axes[row, 4].set_title("Vegetation Index\n(G-R)/(G+R)", fontsize=9, fontweight='bold')
