@@ -1,5 +1,5 @@
 # ============================================
-# Wildfire Classification Project - Enhanced
+# Wildfire Classification Project - Enhanced with CAM
 # ============================================
 
 import os
@@ -16,19 +16,17 @@ from sklearn.metrics import (
 )
 import seaborn as sns
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 
 # ============================================
 # Dataset Setup
 # ============================================
-
-# Shoutout Chat for all the help loading data.
-# I was very confused and it was able to help me get my
-# code working.
 
 base_dir = "archive" 
 
@@ -63,17 +61,23 @@ print(f"Total images: {len(image_paths)}")
 
 X_list = []
 y_list = []
+path_list = []  # Keep track of paths for visualization
 for path, label in zip(image_paths, labels):
     arr = load_and_resize(path)
     if arr is not None:
         X_list.append(arr)
         y_list.append(label)
+        path_list.append(path)
 
 X = np.array(X_list) / 255.0
 y = np.array(y_list)
 
-X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.40, random_state=42)
-X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.50, random_state=42)
+X_train, X_temp, y_train, y_temp, paths_train, paths_temp = train_test_split(
+    X, y, path_list, test_size=0.40, random_state=42
+)
+X_val, X_test, y_val, y_test, paths_val, paths_test = train_test_split(
+    X_temp, y_temp, paths_temp, test_size=0.50, random_state=42
+)
 
 print(f"Training samples: {len(X_train)}")
 print(f"Validation samples: {len(X_val)}")
@@ -92,8 +96,6 @@ print("Data normalized using training set statistics")
 # ============================================
 # PyTorch Dataset
 # ============================================
-# Chat also helped me with splitting the data
-# with tensors.
 
 class WildfireDataset(Dataset):
     def __init__(self, X, y):
@@ -154,10 +156,6 @@ def train_with_validation(model, train_loader, val_loader, epochs=50, lr=1e-3, p
         if (epoch + 1) % 10 == 0:
             print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
         
-
-        # The early stopping was something chat recommended to me
-        # I had it help me implement this portion, and explain why
-        # this would be helpful.
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
@@ -229,11 +227,11 @@ print(f"Test Accuracy: {acc2:.4f}")
 
 
 # ============================================
-# Model 3: CNN
+# Model 3: CNN with CAM Support
 # ============================================
 
 print("\n" + "="*50)
-print("Training CNN")
+print("Training CNN with CAM Support")
 print("="*50)
 
 X_train_cnn = X_train.reshape(-1, 3, 64, 64)
@@ -248,19 +246,35 @@ train_loader_cnn = DataLoader(train_dataset_cnn, batch_size=32, shuffle=True)
 val_loader_cnn = DataLoader(val_dataset_cnn, batch_size=32, shuffle=False)
 test_loader_cnn = DataLoader(test_dataset_cnn, batch_size=32, shuffle=False)
 
-model3 = nn.Sequential(
-    nn.Conv2d(3, 32, kernel_size=3, padding=1),
-    nn.ReLU(),
-    nn.MaxPool2d(2, 2),
-    nn.Conv2d(32, 64, kernel_size=3, padding=1),
-    nn.ReLU(),
-    nn.MaxPool2d(2, 2),
-    nn.Flatten(),
-    nn.Linear(64 * 16 * 16, 128),
-    nn.ReLU(),
-    nn.Dropout(0.3),
-    nn.Linear(128, 1)
-)
+
+class CNNWithCAM(nn.Module):
+    """CNN designed to support Class Activation Mapping"""
+    def __init__(self):
+        super(CNNWithCAM, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+        )
+        self.gap = nn.AdaptiveAvgPool2d(1)  # Global Average Pooling for CAM
+        self.fc = nn.Linear(64, 1)
+        
+        # Store feature maps for CAM
+        self.feature_maps = None
+        
+    def forward(self, x):
+        x = self.features(x)
+        self.feature_maps = x  # Save for CAM
+        x = self.gap(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+
+
+model3 = CNNWithCAM()
 train_losses3, val_losses3 = train_with_validation(model3, train_loader_cnn, val_loader_cnn, epochs=30, lr=1e-3)
 
 preds3, probs3 = get_predictions(model3, test_loader_cnn)
@@ -287,10 +301,190 @@ print(f"Test Accuracy: {acc4:.4f}")
 
 
 # ============================================
+# Class Activation Mapping (CAM)
+# ============================================
+
+def generate_cam(model, image_tensor):
+    """Generate Class Activation Map for a single image"""
+    model.eval()
+    with torch.no_grad():
+        # Forward pass
+        output = model(image_tensor.unsqueeze(0))
+        
+        # Get feature maps (last conv layer output)
+        feature_maps = model.feature_maps[0]  # Shape: [64, 16, 16]
+        
+        # Get weights from the final FC layer
+        weights = model.fc.weight.data[0]  # Shape: [64]
+        
+        # Generate CAM by weighted combination of feature maps
+        cam = torch.zeros(feature_maps.shape[1:])
+        for i, w in enumerate(weights):
+            cam += w * feature_maps[i]
+        
+        # Normalize CAM
+        cam = cam - cam.min()
+        if cam.max() > 0:
+            cam = cam / cam.max()
+        
+        return cam.cpu().numpy()
+
+
+def visualize_cam_overlay(original_image, cam, alpha=0.5):
+    """Create overlay of CAM on original image"""
+    # Resize CAM to match original image
+    cam_resized = np.array(Image.fromarray(cam).resize((64, 64), Image.BILINEAR))
+    
+    # Create heatmap colormap (blue -> green -> yellow -> red)
+    cmap = plt.cm.jet
+    cam_colored = cmap(cam_resized)[:, :, :3]  # Remove alpha channel
+    
+    # Overlay on original
+    overlay = (1 - alpha) * original_image + alpha * cam_colored
+    overlay = np.clip(overlay, 0, 1)
+    
+    return overlay, cam_colored
+
+
+def plot_cam_examples(model, X_test_cnn, y_test, paths_test, n_samples=8):
+    """Plot CAM visualizations for sample images"""
+    fig, axes = plt.subplots(4, n_samples, figsize=(n_samples*3, 12))
+    
+    # Select mix of correct and incorrect predictions
+    model.eval()
+    with torch.no_grad():
+        test_probs = torch.sigmoid(model(torch.FloatTensor(X_test_cnn))).numpy().flatten()
+    test_preds = (test_probs >= 0.5).astype(int)
+    
+    # Get some correct wildfire, correct no-wildfire, and some misclassifications
+    correct_fire = np.where((y_test == 1) & (test_preds == 1))[0]
+    correct_nofire = np.where((y_test == 0) & (test_preds == 0))[0]
+    
+    samples = []
+    samples.extend(np.random.choice(correct_fire, min(4, len(correct_fire)), replace=False))
+    samples.extend(np.random.choice(correct_nofire, min(4, len(correct_nofire)), replace=False))
+    
+    for col, idx in enumerate(samples):
+        # Original image
+        original = X_test_cnn[idx].transpose(1, 2, 0)
+        original = (original - original.min()) / (original.max() - original.min())
+        
+        # Generate CAM
+        image_tensor = torch.FloatTensor(X_test_cnn[idx])
+        cam = generate_cam(model, image_tensor)
+        
+        # Create overlay
+        overlay, cam_colored = visualize_cam_overlay(original, cam, alpha=0.4)
+        
+        # Plot original
+        axes[0, col].imshow(original)
+        axes[0, col].set_title(f"Original\nTrue: {'Fire' if y_test[idx] else 'No Fire'}", 
+                               fontsize=9, fontweight='bold')
+        axes[0, col].axis('off')
+        
+        # Plot CAM heatmap
+        axes[1, col].imshow(cam, cmap='jet')
+        axes[1, col].set_title(f"CAM Heatmap\nPred: {test_probs[idx]:.2f}", 
+                               fontsize=9, fontweight='bold')
+        axes[1, col].axis('off')
+        
+        # Plot overlay
+        axes[2, col].imshow(overlay)
+        axes[2, col].set_title("CAM Overlay", fontsize=9, fontweight='bold')
+        axes[2, col].axis('off')
+        
+        # Plot RGB channels separately
+        rgb_composite = np.concatenate([
+            np.expand_dims(original[:, :, 0], axis=1),
+            np.expand_dims(original[:, :, 1], axis=1),
+            np.expand_dims(original[:, :, 2], axis=1)
+        ], axis=1)
+        rgb_composite = rgb_composite.reshape(64, -1)
+        axes[3, col].imshow(rgb_composite, cmap='gray')
+        axes[3, col].set_title("R | G | B Channels", fontsize=9, fontweight='bold')
+        axes[3, col].axis('off')
+    
+    plt.suptitle("Class Activation Mapping (CAM) - Wildfire Risk Visualization", 
+                 fontsize=14, fontweight='bold', y=0.995)
+    plt.tight_layout()
+    plt.savefig('cam_visualization.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("\n✓ CAM visualization saved to 'cam_visualization.png'")
+
+
+# ============================================
+# Feature Channel Visualization
+# ============================================
+
+def plot_feature_channels(X_test_cnn, y_test, n_samples=6):
+    """Visualize different feature representations of satellite images"""
+    fig, axes = plt.subplots(n_samples, 7, figsize=(21, n_samples*3))
+    
+    # Select diverse samples
+    fire_samples = np.where(y_test == 1)[0][:n_samples//2]
+    nofire_samples = np.where(y_test == 0)[0][:n_samples//2]
+    samples = np.concatenate([fire_samples, nofire_samples])
+    
+    for row, idx in enumerate(samples):
+        img = X_test_cnn[idx].transpose(1, 2, 0)
+        img = (img - img.min()) / (img.max() - img.min())
+        
+        # Original RGB
+        axes[row, 0].imshow(img)
+        axes[row, 0].set_title("RGB Composite", fontsize=9, fontweight='bold')
+        axes[row, 0].axis('off')
+        
+        # Individual channels
+        axes[row, 1].imshow(img[:, :, 0], cmap='Reds')
+        axes[row, 1].set_title("Red Channel", fontsize=9, fontweight='bold')
+        axes[row, 1].axis('off')
+        
+        axes[row, 2].imshow(img[:, :, 1], cmap='Greens')
+        axes[row, 2].set_title("Green Channel", fontsize=9, fontweight='bold')
+        axes[row, 2].axis('off')
+        
+        axes[row, 3].imshow(img[:, :, 2], cmap='Blues')
+        axes[row, 3].set_title("Blue Channel", fontsize=9, fontweight='bold')
+        axes[row, 3].axis('off')
+        
+        # Computed indices
+        # Normalized Difference (simulated vegetation index)
+        nd = (img[:, :, 1] - img[:, :, 0]) / (img[:, :, 1] + img[:, :, 0] + 1e-8)
+        axes[row, 4].imshow(nd, cmap='RdYlGn')
+        axes[row, 4].set_title("Vegetation Index\n(G-R)/(G+R)", fontsize=9, fontweight='bold')
+        axes[row, 4].axis('off')
+        
+        # Intensity (brightness)
+        intensity = img.mean(axis=2)
+        axes[row, 5].imshow(intensity, cmap='gray')
+        axes[row, 5].set_title("Intensity", fontsize=9, fontweight='bold')
+        axes[row, 5].axis('off')
+        
+        # Edge detection (Sobel-like)
+        from scipy import ndimage
+        edges = ndimage.sobel(intensity)
+        axes[row, 6].imshow(edges, cmap='hot')
+        axes[row, 6].set_title("Edge Detection", fontsize=9, fontweight='bold')
+        axes[row, 6].axis('off')
+        
+        # Add label
+        label_text = "WILDFIRE" if y_test[idx] == 1 else "NO WILDFIRE"
+        color = 'red' if y_test[idx] == 1 else 'green'
+        axes[row, 0].text(2, 8, label_text, color=color, fontsize=8, 
+                         fontweight='bold', bbox=dict(boxstyle='round', 
+                         facecolor='white', alpha=0.8))
+    
+    plt.suptitle("Satellite Image Feature Analysis - Multiple Channel Representations", 
+                 fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig('feature_channels.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✓ Feature channel visualization saved to 'feature_channels.png'")
+
+
+# ============================================
 # Evaluation Functions
 # ============================================
-# I also recieved a lot of help with the evaluation
-# and graphing functions.
 
 def evaluate_model(y_true, y_pred, y_proba, model_name):
     print(f"\n{'='*60}")
@@ -480,20 +674,42 @@ losses_dict = {
 }
 plot_training_curves(losses_dict)
 
-print("\nGenerating visualizations...")
+print("\nGenerating standard visualizations...")
 plot_roc_curves(models_data, y_test)
 plot_precision_recall_curves(models_data, y_test)
 plot_confusion_matrices(results)
 plot_metrics_comparison(results)
 
-print("\n✓ All visualizations saved!")
+# ============================================
+# NEW: Generate CAM and Feature Visualizations
+# ============================================
+
+print("\n" + "="*60)
+print("GENERATING CAM AND FEATURE VISUALIZATIONS")
+print("="*60)
+
+print("\nGenerating Class Activation Maps...")
+plot_cam_examples(model3, X_test_cnn, y_test, paths_test, n_samples=8)
+
+print("\nGenerating Feature Channel Analysis...")
+plot_feature_channels(X_test_cnn, y_test, n_samples=6)
+
+print("\n✓ All visualizations completed and saved!")
+print("\nGenerated files:")
 print("  - training_curves.png")
 print("  - roc_curves.png")
 print("  - pr_curves.png")
 print("  - confusion_matrices.png")
 print("  - metrics_comparison.png")
+print("  - cam_visualization.png  [NEW]")
+print("  - feature_channels.png  [NEW]")
+print("  - model_results.csv")
 
 best_model_idx = np.argmax([r['f1'] for r in results])
-print(f"\n Best Model (by F1-score): {results[best_model_idx]['model']}")
+print(f"\n🏆 Best Model (by F1-score): {results[best_model_idx]['model']}")
 print(f"   F1-Score: {results[best_model_idx]['f1']:.4f}")
 print(f"   ROC-AUC: {results[best_model_idx]['roc_auc']:.4f}")
+
+print("\n" + "="*60)
+print("PROJECT COMPLETE!")
+print("="*60)
